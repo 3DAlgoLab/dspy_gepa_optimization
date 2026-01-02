@@ -3,7 +3,7 @@
 import dspy
 import os
 from dotenv import load_dotenv
-# from dspy.adapters.baml_adapter import BAMLAdapter
+
 import json
 import logging
 from dspy.evaluate import Evaluate
@@ -15,20 +15,22 @@ import random
 # LangChain document loaders, text splitter, vectorstore and embeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings   # wrapper for sentence-transformers
+from langchain_huggingface import (
+    HuggingFaceEmbeddings,
+)  # wrapper for sentence-transformers
 from langchain.vectorstores import FAISS
 
-# import mlflow
+import mlflow
 
-# mlflow.dspy.autolog(
-#     log_compiles=True,    # Track optimization process
-#     log_evals=True,       # Track evaluation results
-#     log_traces_from_compile=True  # Track program traces during optimization
-# )
+mlflow.dspy.autolog(
+    log_compiles=True,  # Track optimization process
+    log_evals=True,  # Track evaluation results
+    log_traces_from_compile=True,  # Track program traces during optimization
+)
 
-# mlflow.set_tracking_uri("http://127.0.0.1:5000")
-# mlflow.set_experiment("med-ai-workshop")
-# mlflow.autolog()
+mlflow.dspy.autolog()
+mlflow.set_tracking_uri("http://127.0.0.1:5000")
+mlflow.set_experiment("med-ai-workshop")
 
 load_dotenv()
 
@@ -37,32 +39,29 @@ if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("metric")
 
-# %%
-# question = "What is a language model in one sentence?"
-# lm = dspy.LM(
-#     "openai/gpt-4.1-mini",                 # LiteLLM route for OpenRouter models
-#     api_base="https://api.openai.com/v1",
-#     api_key=os.environ["OPENAI_API_KEY"],
-#     model_type="chat",
-#     cache=False,
-#     temperature=0.3,
-#     max_tokens=20000
-# )
+LM_MODEL_STUDENT = "openrouter/nvidia/nemotron-nano-12b-v2-vl:free"
+LM_MODEL_TEACHER = "openrouter/openai/gpt-oss-120b:free"
 
-# print(lm(question))
+# %%
+question = "What is a language model in one sentence?"
+lm = dspy.LM(
+    LM_MODEL_TEACHER,  # LiteLLM route for OpenRouter models
+    model_type="chat",
+    temperature=0.3,
+    max_tokens=-1,
+)
+
+print(lm(question))
 
 
 # %%
 # After we configure `lm` later in this notebook:
 question = "What is a language model in one sentence?"
 lm = dspy.LM(
-    "openrouter/openai/gpt-oss-20b",                 # LiteLLM route for OpenRouter models
-    api_base="https://openrouter.ai/api/v1",
-    api_key=os.environ["OPENROUTER_API_KEY"],
+    LM_MODEL_STUDENT,
     model_type="chat",
     cache=False,
-    temperature=0.3,
-    max_tokens=20000
+    temperature=0.3,    
 )
 
 print(lm(question))
@@ -83,7 +82,10 @@ Outputs a directory "faiss_index" with the persisted vectorstore.
 """
 
 # --- Config: change these paths to your downloaded PDFs ---
-DIABETES_PDF_PATHS = ["docs/diabets1.pdf", "docs/diabets2.pdf"]   # <-- put your two PDF filenames here
+DIABETES_PDF_PATHS = [
+    "docs/diabets1.pdf",
+    "docs/diabets2.pdf",
+]  # <-- put your two PDF filenames here
 COPD_PDF_PATHS = ["docs/copd1.pdf", "docs/copd2.pdf"]
 OUTPUT_DIABETES_FAISS_DIR = "faiss_index/diabetes"
 OUTPUT_COPD_FAISS_DIR = "faiss_index/copd"
@@ -91,6 +93,7 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 # chunk settings (tweak for your needs)
 CHUNK_SIZE = 400
 CHUNK_OVERLAP = 200
+
 
 def load_pdfs(paths):
     """Load PDFs into LangChain Document objects (keeps page-level granularity)."""
@@ -112,6 +115,7 @@ def load_pdfs(paths):
         all_docs.extend(pages)
     return all_docs
 
+
 # %%
 def chunk_documents(documents, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP):
     """Split documents into smaller chunks (keeps metadata)."""
@@ -124,22 +128,32 @@ def chunk_documents(documents, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLA
     chunks = text_splitter.split_documents(documents)
     return chunks
 
+
 # %%
 
-def build_vectorstore(chunks, model_name=EMBEDDING_MODEL, save_dir=OUTPUT_DIABETES_FAISS_DIR):
+
+def build_vectorstore(
+    chunks, model_name=EMBEDDING_MODEL, save_dir=OUTPUT_DIABETES_FAISS_DIR
+):
     """Create embeddings and store them in a FAISS vectorstore, then persist to disk."""
     # Instantiate HuggingFaceEmbeddings wrapper (requires sentence-transformers installed)
-    hf_emb = HuggingFaceEmbeddings(model_name=model_name,
-                                   model_kwargs={"device": "cpu"})  # change to "cuda" if available
+    hf_emb = HuggingFaceEmbeddings(
+        model_name=model_name, model_kwargs={"device": "cpu"}
+    )  # change to "cuda" if available
 
     # Build FAISS index from LangChain Document objects
-    print("Creating FAISS vector store from", len(chunks), "chunks. This may take a while...")
+    print(
+        "Creating FAISS vector store from",
+        len(chunks),
+        "chunks. This may take a while...",
+    )
     vectorstore = FAISS.from_documents(chunks, hf_emb)
 
     # Persist to disk
     vectorstore.save_local(save_dir)
     print(f"Saved FAISS vectorstore to: {save_dir}")
     return vectorstore, hf_emb
+
 
 # %%
 
@@ -150,9 +164,13 @@ print(f"Loaded {len(docs)} page-documents from {len(DIABETES_PDF_PATHS)} PDFs.")
 
 print("Chunking Diabetes documents...")
 chunks = chunk_documents(docs)
-print(f"Produced {len(chunks)} chunks (chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP}).")
+print(
+    f"Produced {len(chunks)} chunks (chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})."
+)
 
-diabetes_vectorstore, diabetes_embeddings = build_vectorstore(chunks, save_dir=OUTPUT_DIABETES_FAISS_DIR)
+diabetes_vectorstore, diabetes_embeddings = build_vectorstore(
+    chunks, save_dir=OUTPUT_DIABETES_FAISS_DIR
+)
 
 # %%
 
@@ -162,9 +180,13 @@ print(f"Loaded {len(docs)} page-documents from {len(COPD_PDF_PATHS)} PDFs.")
 
 print("Chunking COPD documents...")
 chunks = chunk_documents(docs)
-print(f"Produced {len(chunks)} chunks (chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP}).")
+print(
+    f"Produced {len(chunks)} chunks (chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})."
+)
 
-copd_vectorstore, copd_embeddings = build_vectorstore(chunks, save_dir=OUTPUT_COPD_FAISS_DIR)
+copd_vectorstore, copd_embeddings = build_vectorstore(
+    chunks, save_dir=OUTPUT_COPD_FAISS_DIR
+)
 
 
 # %%
@@ -180,7 +202,9 @@ def diabetes_vector_search_tool(query: str, k: int = 3) -> str:
         context += f"[PASSAGE {i+1}, score={score:.4f}]\n{doc_content}\\n\\n"
     return context
 
-# %% 
+
+# %%
+
 
 def copd_vector_search_tool(query: str, k: int = 3) -> str:
     """
@@ -206,31 +230,34 @@ copd_vector_search_tool("What are the main treatments for COPD?", k=3)
 
 # Configure your LM (DSPy tutorial uses dspy.LM)
 lm = dspy.LM(
-    "openrouter/openai/gpt-oss-20b",                 # LiteLLM route for OpenRouter models
+    # "openrouter/openai/gpt-oss-20b",  # LiteLLM route for OpenRouter models
+    LM_MODEL_STUDENT,
     api_base="https://openrouter.ai/api/v1",
     api_key=os.environ["OPENROUTER_API_KEY"],
     model_type="chat",
     cache=False,
     temperature=0.3,
-    max_tokens=64000
+    max_tokens=64000,
 )
 dspy.settings.configure(lm=lm)
 
 # Teacher LM for reflection (GEPA)
 teacher_lm = dspy.LM(
-    "openrouter/openai/gpt-oss-20b",
+    LM_MODEL_TEACHER,
     api_base="https://openrouter.ai/api/v1",
     api_key=os.environ["OPENROUTER_API_KEY"],
     model_type="chat",
     cache=False,
     temperature=0.3,
-    max_tokens=64000
+    max_tokens=64000,
 )
+
 
 # %%
 # Define a signature (simple QA)
 class RAGQA(dspy.Signature):
     """You are a helpful assistant. Answer a question using retrieved passages"""
+
     question: str = dspy.InputField()
     context: str = dspy.InputField()
     answer: str = dspy.OutputField()
@@ -255,7 +282,7 @@ react = dspy.ReAct(signature="question->answer", tools=[diabetes_vector_search_t
 question = "What is Gestational Diabetes Mellitus (GDM)?"
 pred = react(question=question)
 
-# %% 
+# %%
 
 pred
 
@@ -268,7 +295,12 @@ with open("docs/qa_pairs_diabets.json", "r") as f:
     qa_diabetes_data = json.load(f)
 
 # Convert to dspy.Example objects
-dataset_diabetes = [dspy.Example(question=item["question"], answer=item["answer"]).with_inputs("question") for item in qa_diabetes_data]
+dataset_diabetes = [
+    dspy.Example(question=item["question"], answer=item["answer"]).with_inputs(
+        "question"
+    )
+    for item in qa_diabetes_data
+]
 
 # shuffle the dataset
 random.shuffle(dataset_diabetes)
@@ -288,7 +320,12 @@ with open("docs/qa_pairs_copd.json", "r") as f:
     qa_copd_data = json.load(f)
 
 # Convert to dspy.Example objects
-dataset_copd = [dspy.Example(question=item["question"], answer=item["answer"]).with_inputs("question") for item in qa_copd_data]
+dataset_copd = [
+    dspy.Example(question=item["question"], answer=item["answer"]).with_inputs(
+        "question"
+    )
+    for item in qa_copd_data
+]
 
 # shuffle the dataset
 random.shuffle(dataset_copd)
@@ -314,11 +351,13 @@ class JudgeConsistency(dspy.Signature):
     - If the answer is completely correct, the score should be 1.0. Otherwise, the score should be less than 1.0.
     - Be very strict in your judgement as this is a medical question.
     """
+
     question: str = dspy.InputField()
     gold_answer: str = dspy.InputField()
     predicted_answer: str = dspy.InputField()
     score: float = dspy.OutputField(desc="a float score between 0 and 1")
     justification: str = dspy.OutputField()
+
 
 class JudgeReactStep(dspy.Signature):
     """Judge whether the next tool call (name + args) is appropriate, well-formed, and relevant.
@@ -326,12 +365,14 @@ class JudgeReactStep(dspy.Signature):
     - Output a strict score in [0, 1].
     - Provide a brief justification and a yes/no style verdict in justification text.
     """
+
     question: str = dspy.InputField()
     tool_name: str = dspy.InputField()
     tool_args_json: str = dspy.InputField()
     score: float = dspy.OutputField(desc="a float score between 0 and 1")
     verdict: str = dspy.OutputField()
     justification: str = dspy.OutputField()
+
 
 def llm_metric_prediction(*args, **kwargs):
     """Metric returning ScoreWithFeedback for GEPA and Evaluate.
@@ -355,13 +396,19 @@ def llm_metric_prediction(*args, **kwargs):
         pred = args[1]
 
     # Special handling: when optimizing the ReAct loop predictor
-    if pred_name and (pred_name == "react" or pred_name.endswith(".react")) and pred_trace:
+    if (
+        pred_name
+        and (pred_name == "react" or pred_name.endswith(".react"))
+        and pred_trace
+    ):
         try:
             _, step_inputs, step_outputs = pred_trace[0]
         except Exception:
             step_inputs, step_outputs = {}, {}
 
-        question_text = getattr(example, "question", None) or step_inputs.get("question", "") or ""
+        question_text = (
+            getattr(example, "question", None) or step_inputs.get("question", "") or ""
+        )
 
         # Read tool name/args from the predictor's outputs (dict or Prediction)
         def _get(o, key, default=""):
@@ -374,7 +421,11 @@ def llm_metric_prediction(*args, **kwargs):
 
         # Heuristics: well-formed JSON args and sensible fields
         args_is_dict = isinstance(tool_args, dict)
-        has_query = args_is_dict and isinstance(tool_args.get("query"), str) and tool_args.get("query", "").strip() != ""
+        has_query = (
+            args_is_dict
+            and isinstance(tool_args.get("query"), str)
+            and tool_args.get("query", "").strip() != ""
+        )
         k_val = tool_args.get("k") if args_is_dict else None
         k_ok = isinstance(k_val, int) and 1 <= k_val <= 10 or k_val is None
         used_tool = tool_name not in ("", "finish")
@@ -384,7 +435,11 @@ def llm_metric_prediction(*args, **kwargs):
             "react-step details | used_tool=%s tool=%s args_keys=%s has_query=%s k=%s early_finish=%s pred_trace_len=%s",
             used_tool,
             str(tool_name),
-            list(tool_args.keys()) if isinstance(tool_args, dict) else type(tool_args).__name__,
+            (
+                list(tool_args.keys())
+                if isinstance(tool_args, dict)
+                else type(tool_args).__name__
+            ),
             has_query,
             k_val,
             early_finish,
@@ -403,7 +458,9 @@ def llm_metric_prediction(*args, **kwargs):
         heuristics_score = max(0.0, min(1.0, heuristics_score))
 
         # LLM judge for the loop step (tool choice + query relevance)
-        tool_args_json = json.dumps(tool_args) if isinstance(tool_args, dict) else str(tool_args)
+        tool_args_json = (
+            json.dumps(tool_args) if isinstance(tool_args, dict) else str(tool_args)
+        )
         with dspy.settings.context(lm=lm):
             react_judge = dspy.Predict(JudgeReactStep)
             judged = react_judge(
@@ -430,16 +487,24 @@ def llm_metric_prediction(*args, **kwargs):
         if not used_tool:
             suggestions.append("Select a retrieval tool before finishing.")
         if early_finish:
-            suggestions.append("Avoid selecting 'finish' until you have evidence from the retrieval tool.")
+            suggestions.append(
+                "Avoid selecting 'finish' until you have evidence from the retrieval tool."
+            )
         if not args_is_dict:
             suggestions.append("Emit next_tool_args as a valid JSON object.")
         else:
             if not has_query:
-                suggestions.append("Include a non-empty 'query' string in next_tool_args.")
-            if k_val is not None and (not isinstance(k_val, int) or k_val < 1 or k_val > 10):
+                suggestions.append(
+                    "Include a non-empty 'query' string in next_tool_args."
+                )
+            if k_val is not None and (
+                not isinstance(k_val, int) or k_val < 1 or k_val > 10
+            ):
                 suggestions.append("Choose a reasonable k (e.g., 3–5).")
         if not suggestions:
-            suggestions.append("Good step. Keep queries concise and set k=5 by default.")
+            suggestions.append(
+                "Good step. Keep queries concise and set k=5 by default."
+            )
 
         feedback_text = (
             f"ReAct step — LLM score: {llm_score:.2f}, heuristics: {heuristics_score:.2f}. "
@@ -469,38 +534,55 @@ def llm_metric_prediction(*args, **kwargs):
     score = getattr(judged, "score", None) or 0.0
     score = max(0.0, min(1.0, score))
     justification = getattr(judged, "justification", "") or ""
-    logger.info("answer-level score=%.3f for question='%s'", score, (example.question[:80] + "...") if len(example.question) > 80 else example.question)
+    logger.info(
+        "answer-level score=%.3f for question='%s'",
+        score,
+        (
+            (example.question[:80] + "...")
+            if len(example.question) > 80
+            else example.question
+        ),
+    )
     feedback_text = f"Score: {score}. {justification}".strip()
     return ScoreWithFeedback(score=score, feedback=feedback_text)
 
+
 # %%
 # Set up the evaluator
-evaluator_diabetes = Evaluate(devset=devset_diabetes, num_threads=32, display_progress=True, display_table=5, provide_traceback=True)
+evaluator_diabetes = Evaluate(
+    devset=devset_diabetes,
+    num_threads=32,
+    display_progress=True,
+    display_table=5,
+    provide_traceback=True,
+)
+
 
 # %%
 class ReActSignature(dspy.Signature):
     """You are a helpful assistant. Answer user's question."""
+
     question: str = dspy.InputField()
     answer: str = dspy.OutputField()
 
+
 class DiabetesAgent(dspy.Module):
-    def __init__(
-        self
-    ):
+    def __init__(self):
         super().__init__()
         # init LLM
         self.lm = dspy.LM(
-            "openrouter/openai/gpt-oss-20b", 
-            api_key=os.getenv("OPENROUTER_API_KEY"), 
-            temperature=0.3, 
+            "openrouter/openai/gpt-oss-20b",
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            temperature=0.3,
             max_tokens=64000,
-            cache=False
+            cache=False,
         )
         dspy.configure(lm=self.lm)
         self.agent = dspy.ReAct(ReActSignature, tools=[diabetes_vector_search_tool])
 
     def forward(self, question: str):
         return self.agent(question=question)
+
 
 diabetes_agent = DiabetesAgent()
 
@@ -511,13 +593,15 @@ diabetes_agent(question="What are the main treatments for Type 2 diabetes?")
 # %%
 diabetes_agent.lm.inspect_history(n=2)
 
-# %% 
+# %%
 diabetes_agent
 
 # %%
 # Evaluate the baseline agent (the existing `react`)
 print("Evaluating the baseline ReAct agent...")
-diabetes_baseline_eval = evaluator_diabetes(diabetes_agent, metric=llm_metric_prediction)
+diabetes_baseline_eval = evaluator_diabetes(
+    diabetes_agent, metric=llm_metric_prediction
+)
 
 # %%
 diabetes_baseline_eval
@@ -540,7 +624,9 @@ teleprompter = GEPA(
 
 # %%
 # Compile/Optimize the ReAct agent (use the friendlier tool for better LM usability)
-optimized_diabetes_agent = teleprompter.compile(student=diabetes_agent, trainset=trainset_diabetes, valset=devset_diabetes)
+optimized_diabetes_agent = teleprompter.compile(
+    student=diabetes_agent, trainset=trainset_diabetes, valset=devset_diabetes
+)
 
 # %%
 optimized_diabetes_agent
@@ -566,7 +652,9 @@ print(f"Best candidate components: {best_candidate}")
 # %%
 # List all candidates with their scores (sorted by performance)
 print("\nAll candidates ranked by validation score:")
-for rank, (idx, score) in enumerate(sorted(enumerate(val_scores), key=lambda x: x[1], reverse=True), 1):
+for rank, (idx, score) in enumerate(
+    sorted(enumerate(val_scores), key=lambda x: x[1], reverse=True), 1
+):
     print(f"Rank {rank}: Candidate {idx} - Score: {score}")
 
 # %%
@@ -574,7 +662,9 @@ for rank, (idx, score) in enumerate(sorted(enumerate(val_scores), key=lambda x: 
 
 # %%
 print("\\n\\nEvaluating the optimized ReAct agent...")
-optimized_diabetes_eval = evaluator_diabetes(optimized_diabetes_agent, metric=llm_metric_prediction)
+optimized_diabetes_eval = evaluator_diabetes(
+    optimized_diabetes_agent, metric=llm_metric_prediction
+)
 
 # %%
 optimized_diabetes_eval
@@ -591,7 +681,9 @@ optimized_diabetes_agent
 # %%
 # save the optimized model in a new folder
 os.makedirs("dspy_program", exist_ok=True)
-optimized_diabetes_agent.save("dspy_program/optimized_react_diabets.json", save_program=False)
+optimized_diabetes_agent.save(
+    "dspy_program/optimized_react_diabets.json", save_program=False
+)
 
 
 # %%
@@ -599,23 +691,30 @@ optimized_diabetes_agent.save("dspy_program/optimized_react_diabets.json", save_
 class COPDAgent(dspy.Module):
     def __init__(self):
         self.lm = dspy.LM(
-            "openrouter/openai/gpt-oss-20b", 
-            api_key=os.getenv("OPENROUTER_API_KEY"), 
-            temperature=0.3, 
+            "openrouter/openai/gpt-oss-20b",
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            temperature=0.3,
             max_tokens=64000,
-            cache=False
+            cache=False,
         )
         dspy.configure(lm=self.lm)
         self.copd_agent = dspy.ReAct(ReActSignature, tools=[copd_vector_search_tool])
 
     def forward(self, question: str):
         return self.copd_agent(question=question)
-    
+
+
 copd_agent = COPDAgent()
 
 
 # %%
-evaluator_copd = Evaluate(devset=devset_copd, num_threads=32, display_progress=True, display_table=5, provide_traceback=True)
+evaluator_copd = Evaluate(
+    devset=devset_copd,
+    num_threads=32,
+    display_progress=True,
+    display_table=5,
+    provide_traceback=True,
+)
 
 # Evaluate the baseline agent (the existing `react`)
 print("Evaluating the baseline ReAct agent...")
@@ -637,7 +736,9 @@ teleprompter = GEPA(
     reflection_lm=teacher_lm,
 )
 
-optimized_copd_agent = teleprompter.compile(student=copd_agent, trainset=trainset_copd, valset=devset_copd)
+optimized_copd_agent = teleprompter.compile(
+    student=copd_agent, trainset=trainset_copd, valset=devset_copd
+)
 
 # %%
 optimized_copd_agent
@@ -663,13 +764,15 @@ print(f"Best candidate components: {best_candidate}")
 # %%
 # List all candidates with their scores (sorted by performance)
 print("\nAll candidates ranked by validation score:")
-for rank, (idx, score) in enumerate(sorted(enumerate(val_scores), key=lambda x: x[1], reverse=True), 1):
+for rank, (idx, score) in enumerate(
+    sorted(enumerate(val_scores), key=lambda x: x[1], reverse=True), 1
+):
     print(f"Rank {rank}: Candidate {idx} - Score: {score}")
 # %%
 print("\\n\\nEvaluating the optimized ReAct agent...")
 optimized_copd_eval = evaluator_copd(optimized_copd_agent, metric=llm_metric_prediction)
 
-# %% 
+# %%
 optimized_copd_eval
 
 # %%
@@ -682,6 +785,7 @@ optimized_copd_agent.save("dspy_program/optimized_react_copd.json", save_program
 
 # Wrap the domain agents as callable tools for the lead agent
 # Prefer the optimized Diabetes agent if available; otherwise fallback to baseline `react`.
+
 
 def ask_diabetes(question: str) -> str:
     """Call the Diabetes expert agent and return its answer text."""
@@ -699,18 +803,19 @@ def ask_copd(question: str) -> str:
 class LeadReAct(dspy.Module):
     def __init__(self):
         self.lm = dspy.LM(
-            "openrouter/openai/gpt-oss-20b", 
-            api_key=os.getenv("OPENROUTER_API_KEY"), 
-            temperature=0.3, 
+            "openrouter/openai/gpt-oss-20b",
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            temperature=0.3,
             max_tokens=64000,
-            cache=False
+            cache=False,
         )
         dspy.configure(lm=self.lm)
         self.lead_react = dspy.ReAct(ReActSignature, tools=[ask_diabetes, ask_copd])
 
     def forward(self, question: str):
         return self.lead_react(question=question)
-    
+
+
 lead_react = LeadReAct()
 
 # %%
@@ -723,7 +828,12 @@ with open("docs/qa_pairs_joint.json", "r") as f:
     qa_joint_data = json.load(f)
 
 # Convert to dspy.Example objects
-joint_dataset = [dspy.Example(question=item["question"], answer=item["answer"]).with_inputs("question") for item in qa_joint_data]
+joint_dataset = [
+    dspy.Example(question=item["question"], answer=item["answer"]).with_inputs(
+        "question"
+    )
+    for item in qa_joint_data
+]
 
 # shuffle the dataset
 random.shuffle(joint_dataset)
@@ -739,7 +849,13 @@ print(f"Dev set size: {len(devset_joint)}")
 
 # %%
 # Baseline evaluation of the lead agent on the joint dev set
-evaluator_joint = Evaluate(devset=devset_joint, num_threads=32, display_progress=True, display_table=5, provide_traceback=True)
+evaluator_joint = Evaluate(
+    devset=devset_joint,
+    num_threads=32,
+    display_progress=True,
+    display_table=5,
+    provide_traceback=True,
+)
 print("Evaluating baseline Lead ReAct (agents-as-tools) on joint dev set...")
 baseline_lead_eval = evaluator_joint(lead_react, metric=llm_metric_prediction)
 
@@ -761,7 +877,9 @@ teleprompter_joint = GEPA(
 )
 
 
-optimized_lead_react = teleprompter_joint.compile(student=lead_react, trainset=trainset_joint, valset=devset_joint)
+optimized_lead_react = teleprompter_joint.compile(
+    student=lead_react, trainset=trainset_joint, valset=devset_joint
+)
 
 # %%
 
@@ -784,7 +902,9 @@ print(f"Best candidate components: {best_candidate}")
 
 # %%
 print("\n\nEvaluating the optimized Lead ReAct agent...")
-optimized_lead_eval = evaluator_joint(optimized_lead_react, metric=llm_metric_prediction)
+optimized_lead_eval = evaluator_joint(
+    optimized_lead_react, metric=llm_metric_prediction
+)
 
 # %%
 optimized_lead_eval
@@ -802,4 +922,3 @@ optimized_lead_react.lm.inspect_history(n=2)
 # %%
 # Save the optimized lead agent
 optimized_lead_react.save("dspy_program/optimized_lead_react.json", save_program=False)
-
