@@ -1,206 +1,327 @@
-# %%
+# %% Cell marker for Jupyter notebook execution
 
+# Import DSPy framework for building and optimizing language model programs
 import dspy
+# Import standard os module for environment variable access
 import os
+# Import dotenv to load environment variables from .env file
 from dotenv import load_dotenv
 
+# Import JSON for data serialization/deserialization
 import json
+# Import logging for structured logging throughout the application
 import logging
+# Import DSPy's Evaluate class for systematic model evaluation
 from dspy.evaluate import Evaluate
+# Import GEPA (Generalized Evolutionary Prompt Adaptation) optimizer
 from dspy.teleprompt import GEPA
+# Import ScoreWithFeedback for detailed optimization feedback
 from dspy.teleprompt.gepa.gepa_utils import ScoreWithFeedback
+# Import Path for cross-platform path manipulation
 from pathlib import Path
+# Import random for dataset shuffling and random operations
 import random
 
-# LangChain document loaders, text splitter, vectorstore and embeddings
+# LangChain document loaders for PDF processing
 from langchain_community.document_loaders import PyPDFLoader
+# Text splitter for chunking large documents
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+# HuggingFace embeddings wrapper for sentence transformers
 from langchain_huggingface import (
     HuggingFaceEmbeddings,
 )  # wrapper for sentence-transformers
+# FAISS vector store for efficient similarity search
 from langchain.vectorstores import FAISS
 
+# Import MLflow for experiment tracking and model management
 import mlflow
 
+# Enable MLflow autologging for DSPy experiments
 mlflow.dspy.autolog(
-    log_compiles=True,  # Track optimization process
-    log_evals=True,  # Track evaluation results
+    log_compiles=True,  # Track optimization process and compilation steps
+    log_evals=True,  # Track evaluation results and metrics
     log_traces_from_compile=True,  # Track program traces during optimization
 )
 
+# Additional MLflow autologging call for comprehensive tracking
 mlflow.dspy.autolog()
+# Set MLflow tracking server URI to localhost
 mlflow.set_tracking_uri("http://127.0.0.1:5000")
+# Set MLflow experiment name for organizing runs
 mlflow.set_experiment("med-ai-workshop")
 
+# Load environment variables from .env file (includes API keys)
 load_dotenv()
 
-# Configure basic logging if not already configured by the host app
+# Configure basic logging if no handlers are already configured
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO)
+# Create logger instance for metric tracking
 logger = logging.getLogger("metric")
 
+# Define student model: smaller, faster model for optimization
 LM_MODEL_STUDENT = "openrouter/nvidia/nemotron-nano-12b-v2-vl:free"
+# Define teacher model: larger, more capable model for reflection
 LM_MODEL_TEACHER = "openrouter/openai/gpt-oss-120b:free"
 
-# %%
+# %% Cell marker for testing student model
+
+# Use the same test question to compare student model performance
 question = "What is a language model in one sentence?"
+# Create a DSPy LM instance for the student model (Nemotron-Nano-12B)
 lm = dspy.LM(
-    LM_MODEL_TEACHER,  # LiteLLM route for OpenRouter models
-    model_type="chat",
-    temperature=0.3,
-    max_tokens=-1,
+    LM_MODEL_STUDENT,  # Using the smaller student model
+    model_type="chat",  # Specify chat completion mode
+    cache=False,  # Disable caching to get fresh responses
+    temperature=0.3,  # Low temperature for consistent responses
 )
 
+# Send the question to the student model and print the response
 print(lm(question))
 
 
-# %%
-# After we configure `lm` later in this notebook:
+# %% Cell marker for testing teacher model
+
+# Define a test question to verify model functionality
 question = "What is a language model in one sentence?"
+# Create a DSPy LM instance for the teacher model (GPT-OSS-120B)
 lm = dspy.LM(
-    LM_MODEL_STUDENT,
-    model_type="chat",
-    cache=False,
-    temperature=0.3,    
+    LM_MODEL_TEACHER,  # Using the larger teacher model for this test
+    model_type="chat",  # Specify chat completion mode
+    temperature=0.3,  # Low temperature for more deterministic responses
+    max_tokens=-1,  # Use model's default max tokens
 )
 
+# Send the question to the model and print the response
 print(lm(question))
 
-# %%
+# %% Cell marker for local model (commented out)
+
+# Example of how to configure a local Ollama model
 # local_lm = dspy.LM(
-#         model='ollama_chat/qwen3:4b',
-#         api_base='http://localhost:11434',
-#         api_key=''
+#         model='ollama_chat/qwen3:4b',  # Local Qwen model via Ollama
+#         api_base='http://localhost:11434',  # Ollama server endpoint
+#         api_key=''  # No API key needed for local models
 #     )
 
+# Example of querying the local model (currently commented out)
 # print(local_lm(question))
 
-# %%
+# %% Cell marker for vector database setup
+
 """
 Build a FAISS vector DB from two local PDF papers using LangChain.
 Outputs a directory "faiss_index" with the persisted vectorstore.
 """
 
-# --- Config: change these paths to your downloaded PDFs ---
+# --- Configuration section for PDF paths and model settings ---
+# List of diabetes-related PDF file paths for vector database creation
 DIABETES_PDF_PATHS = [
     "docs/diabets1.pdf",
     "docs/diabets2.pdf",
 ]  # <-- put your two PDF filenames here
+# List of COPD-related PDF file paths for vector database creation
 COPD_PDF_PATHS = ["docs/copd1.pdf", "docs/copd2.pdf"]
+# Output directory for diabetes vector database
 OUTPUT_DIABETES_FAISS_DIR = "faiss_index/diabetes"
+# Output directory for COPD vector database
 OUTPUT_COPD_FAISS_DIR = "faiss_index/copd"
+# Embedding model for converting text to vectors
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-# chunk settings (tweak for your needs)
-CHUNK_SIZE = 400
-CHUNK_OVERLAP = 200
+# Text chunking settings for optimal retrieval
+CHUNK_SIZE = 400  # Size of each text chunk in characters
+CHUNK_OVERLAP = 200  # Overlap between chunks to maintain context
 
 
 def load_pdfs(paths):
-    """Load PDFs into LangChain Document objects (keeps page-level granularity)."""
-    all_docs = []
-    for p in paths:
-        p = Path(p)
-        if not p.exists():
+    """
+    Load PDFs into LangChain Document objects (keeps page-level granularity).
+    
+    Args:
+        paths: List of file paths to PDF documents
+        
+    Returns:
+        List of LangChain Document objects with page content and metadata
+        
+    Raises:
+        FileNotFoundError: If any PDF file is not found
+    """
+    all_docs = []  # Initialize list to store all document pages
+    for p in paths:  # Iterate through each PDF path
+        p = Path(p)  # Convert string path to Path object for better handling
+        if not p.exists():  # Check if file exists before processing
             raise FileNotFoundError(f"PDF not found: {p}")
-        loader = PyPDFLoader(str(p))
-        # load returns a list of Document objects (one per page typically)
+        loader = PyPDFLoader(str(p))  # Create PDF loader instance
+        # Load all pages from the PDF - returns list of Document objects
         pages = loader.load()
-        # add a source filename into metadata for traceability
-        for i, doc in enumerate(pages):
-            # ensure a copy of metadata dict (avoid mutating shared objects)
+        # Add source filename and page number to metadata for traceability
+        for i, doc in enumerate(pages):  # Iterate through each page
+            # Create a copy of metadata to avoid mutating shared objects
             meta = dict(doc.metadata or {})
-            meta["source"] = str(p.name)
-            meta["page"] = i
-            doc.metadata = meta
-        all_docs.extend(pages)
-    return all_docs
+            meta["source"] = str(p.name)  # Add source filename
+            meta["page"] = i  # Add page number
+            doc.metadata = meta  # Update document metadata
+        all_docs.extend(pages)  # Add all pages to the main list
+    return all_docs  # Return complete list of document pages
 
 
-# %%
+# %% Cell marker for document chunking
+
 def chunk_documents(documents, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP):
-    """Split documents into smaller chunks (keeps metadata)."""
+    """
+    Split documents into smaller chunks while preserving metadata.
+    
+    Args:
+        documents: List of LangChain Document objects
+        chunk_size: Maximum size of each chunk in characters
+        chunk_overlap: Number of characters to overlap between chunks
+        
+    Returns:
+        List of chunked Document objects with preserved metadata
+    """
+    # Create text splitter with specified parameters and separators
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
+        chunk_size=chunk_size,  # Maximum chunk length
+        chunk_overlap=chunk_overlap,  # Overlap to maintain context
+        # Separators in order of preference for intelligent splitting
         separators=["\n\n", "\n", " ", ""],
     )
-    # split_documents returns list[Document] (with page_content and metadata)
+    # Split documents into chunks while preserving metadata
     chunks = text_splitter.split_documents(documents)
-    return chunks
+    return chunks  # Return list of chunked documents
 
 
-# %%
+# %% Cell marker for vector store creation
 
 
 def build_vectorstore(
     chunks, model_name=EMBEDDING_MODEL, save_dir=OUTPUT_DIABETES_FAISS_DIR
 ):
-    """Create embeddings and store them in a FAISS vectorstore, then persist to disk."""
-    # Instantiate HuggingFaceEmbeddings wrapper (requires sentence-transformers installed)
+    """
+    Create embeddings and store them in a FAISS vectorstore, then persist to disk.
+    
+    Args:
+        chunks: List of chunked Document objects
+        model_name: Name of the embedding model to use
+        save_dir: Directory path to save the vector store
+        
+    Returns:
+        Tuple of (vectorstore, embeddings_model) for further use
+    """
+    # Initialize HuggingFace embeddings wrapper (requires sentence-transformers)
     hf_emb = HuggingFaceEmbeddings(
-        model_name=model_name, model_kwargs={"device": "cpu"}
-    )  # change to "cuda" if available
+        model_name=model_name,  # Use specified embedding model
+        model_kwargs={"device": "cpu"}  # Use CPU; change to "cuda" if GPU available
+    )
 
-    # Build FAISS index from LangChain Document objects
+    # Build FAISS index from document chunks
     print(
         "Creating FAISS vector store from",
         len(chunks),
         "chunks. This may take a while...",
     )
+    # Create vector store by embedding all chunks and building FAISS index
     vectorstore = FAISS.from_documents(chunks, hf_emb)
 
-    # Persist to disk
+    # Save the vector store to disk for later use
     vectorstore.save_local(save_dir)
     print(f"Saved FAISS vectorstore to: {save_dir}")
-    return vectorstore, hf_emb
+    return vectorstore, hf_emb  # Return both vectorstore and embeddings model
 
 
-# %%
+# %% Cell marker for diabetes vector database creation
 
-# if db exists, load it
+# Process diabetes PDFs to create searchable vector database
 print("Loading Diabetes PDFs...")
+# Load all diabetes PDF documents into LangChain Document objects
 docs = load_pdfs(DIABETES_PDF_PATHS)
 print(f"Loaded {len(docs)} page-documents from {len(DIABETES_PDF_PATHS)} PDFs.")
 
 print("Chunking Diabetes documents...")
+# Split documents into smaller chunks for better retrieval
 chunks = chunk_documents(docs)
 print(
     f"Produced {len(chunks)} chunks (chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})."
 )
 
+# Build and save the diabetes vector store
 diabetes_vectorstore, diabetes_embeddings = build_vectorstore(
     chunks, save_dir=OUTPUT_DIABETES_FAISS_DIR
 )
 
-# %%
+# %% Cell marker for COPD vector database creation
 
+# Process COPD PDFs to create searchable vector database
 print("Loading COPD PDFs...")
+# Load all COPD PDF documents into LangChain Document objects
 docs = load_pdfs(COPD_PDF_PATHS)
 print(f"Loaded {len(docs)} page-documents from {len(COPD_PDF_PATHS)} PDFs.")
 
 print("Chunking COPD documents...")
+# Split documents into smaller chunks for better retrieval
 chunks = chunk_documents(docs)
 print(
     f"Produced {len(chunks)} chunks (chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})."
 )
 
+# Build and save the COPD vector store
 copd_vectorstore, copd_embeddings = build_vectorstore(
     chunks, save_dir=OUTPUT_COPD_FAISS_DIR
 )
 
 
-# %%
+# %% Cell marker for diabetes vector search tool
+
 def diabetes_vector_search_tool(query: str, k: int = 3) -> str:
     """
-    A tool for the ReAct agent.
+    A tool for the ReAct agent to search diabetes literature.
     Performs vector search and returns a formatted string of results.
+    
+    Args:
+        query: Search query to find relevant passages
+        k: Number of top results to return (default: 3)
+        
+    Returns:
+        Formatted string with passages and similarity scores
     """
+    # Perform similarity search with scores on diabetes vector store
     results = diabetes_vectorstore.similarity_search_with_score(query, k=k)
+    # Initialize empty context string
     context = ""
+    # Format each result with passage number and score
     for i, (doc, score) in enumerate(results):
-        doc_content = doc.page_content
+        doc_content = doc.page_content  # Extract document text content
+        # Format passage with index, score, and content
         context += f"[PASSAGE {i+1}, score={score:.4f}]\n{doc_content}\\n\\n"
-    return context
+    return context  # Return formatted context for agent
+
+
+# %% Cell marker for COPD vector search tool
+
+
+
+def copd_vector_search_tool(query: str, k: int = 3) -> str:
+    """
+    A tool for the ReAct agent to search COPD literature.
+    Performs vector search and returns a formatted string of results.
+    
+    Args:
+        query: Search query to find relevant passages
+        k: Number of top results to return (default: 3)
+        
+    Returns:
+        Formatted string with passages and similarity scores
+    """
+    # Perform similarity search with scores on COPD vector store
+    results = copd_vectorstore.similarity_search_with_score(query, k=k)
+    # Initialize empty context string
+    context = ""
+    # Format each result with passage number and score
+    for i, (doc, score) in enumerate(results):
+        doc_content = doc.page_content  # Extract document text content
+        # Format passage with index, score, and content
+        context += f"[PASSAGE {i+1}, score={score:.4f}]\n{doc_content}\\n\\n"
+    return context  # Return formatted context for agent
 
 
 # %%
@@ -219,37 +340,41 @@ def copd_vector_search_tool(query: str, k: int = 3) -> str:
     return context
 
 
-# %%
-# quick retrieval test
+# %% Cell marker for diabetes vector search test
+
+# Quick test of the diabetes vector search tool with a sample medical query
 diabetes_vector_search_tool("What are the main treatments for Type 2 diabetes?", k=3)
 
-# %%
+# %% Cell marker for COPD vector search test
+
+# Quick test of the COPD vector search tool with a sample medical query
 copd_vector_search_tool("What are the main treatments for COPD?", k=3)
 
-# %%
+# %% Cell marker for language model configuration
 
-# Configure your LM (DSPy tutorial uses dspy.LM)
+# Configure the main student language model for DSPy
 lm = dspy.LM(
-    # "openrouter/openai/gpt-oss-20b",  # LiteLLM route for OpenRouter models
+    # Using the student model for primary operations
     LM_MODEL_STUDENT,
-    api_base="https://openrouter.ai/api/v1",
-    api_key=os.environ["OPENROUTER_API_KEY"],
-    model_type="chat",
-    cache=False,
-    temperature=0.3,
-    max_tokens=64000,
+    api_base="https://openrouter.ai/api/v1",  # OpenRouter API endpoint
+    api_key=os.environ["OPENROUTER_API_KEY"],  # API key from environment
+    model_type="chat",  # Use chat completion mode
+    cache=False,  # Disable caching for fresh responses
+    temperature=0.3,  # Low temperature for consistency
+    max_tokens=64000,  # Maximum response length
 )
+# Configure DSPy settings to use this LM by default
 dspy.settings.configure(lm=lm)
 
-# Teacher LM for reflection (GEPA)
+# Configure teacher LM for reflection in GEPA optimization
 teacher_lm = dspy.LM(
-    LM_MODEL_TEACHER,
-    api_base="https://openrouter.ai/api/v1",
-    api_key=os.environ["OPENROUTER_API_KEY"],
-    model_type="chat",
-    cache=False,
-    temperature=0.3,
-    max_tokens=64000,
+    LM_MODEL_TEACHER,  # Use larger, more capable teacher model
+    api_base="https://openrouter.ai/api/v1",  # OpenRouter API endpoint
+    api_key=os.environ["OPENROUTER_API_KEY"],  # Same API key
+    model_type="chat",  # Use chat completion mode
+    cache=False,  # Disable caching for fresh responses
+    temperature=0.3,  # Low temperature for consistent reflection
+    max_tokens=64000,  # Maximum response length
 )
 
 
